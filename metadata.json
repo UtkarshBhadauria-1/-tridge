@@ -1,0 +1,6 @@
+{
+  "name": "TRIDGE - Multilingual Rural Information & Government Schemes Platform",
+  "description": "Multilingual rural information and assistance platform powered by TinyFish live-web research and Gemini AI for discovering government schemes, understanding official notices, checking citizen eligibility, and tracking notice changes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,392 @@
+/**
+ * TRIDGE - Multilingual Rural Information and Assistance Platform
+ * Frontend Application Root
+ */
+
+import React, { useState, useEffect } from 'react';
+import {
+  Navbar,
+  SUPPORTED_LANGUAGES,
+} from './components/Navbar.tsx';
+import { CitizenProfileDrawer } from './components/CitizenProfileDrawer.tsx';
+import { SchemeSearchHero } from './components/SchemeSearchHero.tsx';
+import { SchemeCard } from './components/SchemeCard.tsx';
+import { MultilingualModal } from './components/MultilingualModal.tsx';
+import { ChangeDiffModal } from './components/ChangeDiffModal.tsx';
+import { TrackedSchemesDrawer } from './components/TrackedSchemesDrawer.tsx';
+import type { CitizenProfile, Scheme } from './types/scheme.ts';
+import { OFFICIAL_DISCLAIMER } from './utils/matching.ts';
+import {
+  Search,
+  Filter,
+  CheckCircle2,
+  AlertCircle,
+  HelpCircle,
+  Sparkles,
+  BookOpen,
+  Shield,
+  Layers,
+  ArrowUpDown,
+} from 'lucide-react';
+
+const DEFAULT_PROFILE: CitizenProfile = {
+  state: 'Uttar Pradesh',
+  district: 'Lucknow',
+  educationLevel: 'Undergraduate/College',
+  occupation: 'College Student',
+  annualIncome: 140000,
+  socialCategory: 'OBC',
+  gender: 'Female',
+  landholding: 'Landless',
+  isDifferentlyAbled: false,
+};
+
+export default function App() {
+  const [citizenProfile, setCitizenProfile] = useState<CitizenProfile>(DEFAULT_PROFILE);
+  const [currentLanguage, setCurrentLanguage] = useState<string>('Hindi');
+  const [searchQuery, setSearchQuery] = useState<string>(
+    'Find government scholarship schemes for college students in Uttar Pradesh'
+  );
+  const [schemes, setSchemes] = useState<Scheme[]>([]);
+  const [savedSchemes, setSavedSchemes] = useState<Scheme[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [searchProgressStep, setSearchProgressStep] = useState<number>(0);
+  const [searchMode, setSearchMode] = useState<'tinyfish_live' | 'verified_database'>('verified_database');
+  const [liveResearchSummary, setLiveResearchSummary] = useState<string>('');
+
+  // Modals & Drawers state
+  const [isProfileOpen, setIsProfileOpen] = useState<boolean>(false);
+  const [isTrackedOpen, setIsTrackedOpen] = useState<boolean>(false);
+  const [explainingScheme, setExplainingScheme] = useState<Scheme | null>(null);
+  const [diffScheme, setDiffScheme] = useState<Scheme | null>(null);
+
+  // System status
+  const [hasTinyFishKey, setHasTinyFishKey] = useState<boolean>(false);
+  const [hasGeminiKey, setHasGeminiKey] = useState<boolean>(false);
+
+  // Filter tab for results
+  const [verdictFilter, setVerdictFilter] = useState<'all' | 'potentially_eligible' | 'more_info_required' | 'not_eligible'>('all');
+
+  // Load initial status and saved schemes
+  useEffect(() => {
+    fetch('/api/status')
+      .then((res) => res.json())
+      .then((data) => {
+        setHasTinyFishKey(Boolean(data.hasTinyFishKey));
+        setHasGeminiKey(Boolean(data.hasGeminiKey));
+      })
+      .catch((err) => console.error('Status fetch error:', err));
+
+    fetch('/api/schemes/saved')
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data.schemes)) {
+          setSavedSchemes(data.schemes);
+        }
+      })
+      .catch((err) => console.error('Saved schemes fetch error:', err));
+
+    // Execute initial default search
+    performSearch(searchQuery, citizenProfile);
+  }, []);
+
+  const performSearch = async (query: string, profileToUse = citizenProfile) => {
+    setIsLoading(true);
+    setSearchQuery(query);
+    setSearchProgressStep(1);
+
+    const stepInterval = setInterval(() => {
+      setSearchProgressStep((prev) => (prev < 4 ? prev + 1 : prev));
+    }, 400);
+
+    try {
+      const response = await fetch('/api/schemes/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query,
+          citizenProfile: profileToUse,
+        }),
+      });
+
+      clearInterval(stepInterval);
+      setSearchProgressStep(4);
+
+      if (!response.ok) {
+        throw new Error(`HTTP error ${response.status}`);
+      }
+
+      const data = await response.json();
+      setSchemes(data.schemes || []);
+      setSearchMode(data.searchMode || 'verified_database');
+      setLiveResearchSummary(data.liveResearchSummary || '');
+    } catch (err: any) {
+      clearInterval(stepInterval);
+      console.error('Search error:', err);
+      setLiveResearchSummary('Search encountered a network issue. Please check server connectivity.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleUpdateProfile = (newProfile: CitizenProfile) => {
+    setCitizenProfile(newProfile);
+    // Re-evaluate eligibility for current schemes
+    performSearch(searchQuery, newProfile);
+  };
+
+  const handleSaveSnapshot = async (scheme: Scheme) => {
+    try {
+      const response = await fetch('/api/schemes/save-snapshot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scheme }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        // Update local saved list
+        setSavedSchemes((prev) => {
+          const idx = prev.findIndex((s) => s.id === scheme.id);
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = data.scheme;
+            return next;
+          }
+          return [...prev, data.scheme];
+        });
+      }
+    } catch (err) {
+      console.error('Error saving scheme snapshot:', err);
+    }
+  };
+
+  // Filter schemes based on verdict
+  const filteredSchemes = schemes.filter((s) => {
+    if (verdictFilter === 'all') return true;
+    return s.eligibilityMatch?.verdict === verdictFilter;
+  });
+
+  const countEligible = schemes.filter(
+    (s) => s.eligibilityMatch?.verdict === 'potentially_eligible'
+  ).length;
+  const countUncertain = schemes.filter(
+    (s) => s.eligibilityMatch?.verdict === 'more_info_required'
+  ).length;
+  const countIneligible = schemes.filter(
+    (s) => s.eligibilityMatch?.verdict === 'not_eligible'
+  ).length;
+
+  return (
+    <div className="min-h-screen flex flex-col bg-stone-100 text-stone-900">
+      {/* Top Accessible Navbar */}
+      <Navbar
+        currentLanguage={currentLanguage}
+        onLanguageChange={setCurrentLanguage}
+        citizenProfile={citizenProfile}
+        onOpenProfile={() => setIsProfileOpen(true)}
+        onOpenTracked={() => setIsTrackedOpen(true)}
+        trackedCount={savedSchemes.length}
+        hasTinyFishKey={hasTinyFishKey}
+        hasGeminiKey={hasGeminiKey}
+      />
+
+      {/* Hero & Search Interface */}
+      <SchemeSearchHero
+        onSearch={(q) => performSearch(q)}
+        isLoading={isLoading}
+        currentQuery={searchQuery}
+        searchProgressStep={searchProgressStep}
+        searchMode={searchMode}
+        liveResearchSummary={liveResearchSummary}
+        hasTinyFishKey={hasTinyFishKey}
+      />
+
+      {/* Main Content Area */}
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+        {/* Citizen Profile Status Banner */}
+        <section aria-labelledby="profile-summary-heading" className="bg-white rounded-xl border border-stone-200 p-4 mb-6 shadow-2xs flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center space-x-3">
+            <div className="w-10 h-10 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center font-bold text-sm shrink-0">
+              {citizenProfile.socialCategory}
+            </div>
+            <div>
+              <h2 id="profile-summary-heading" className="text-sm font-bold text-stone-900 font-serif">
+                Active Assessment Profile: {citizenProfile.occupation} ({citizenProfile.state})
+              </h2>
+              <p className="text-xs text-stone-500">
+                {citizenProfile.educationLevel} • Annual Income: ₹{citizenProfile.annualIncome.toLocaleString('en-IN')} • {citizenProfile.gender}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={() => setIsProfileOpen(true)}
+              className="text-xs font-semibold text-amber-800 hover:text-amber-900 underline"
+            >
+              Modify Profile Details
+            </button>
+          </div>
+        </section>
+
+        {/* Results Controls & Eligibility Filter Tabs */}
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-6 pb-4 border-b border-stone-200">
+          <div>
+            <h2 className="text-lg sm:text-xl font-bold font-serif text-stone-900">
+              Discovered Schemes & Notices ({filteredSchemes.length})
+            </h2>
+            <p className="text-xs text-stone-500">
+              Showing verified schemes extracted from official government notices
+            </p>
+          </div>
+
+          {/* Verdict Filter Tabs */}
+          <div className="flex flex-wrap items-center gap-1.5 text-xs font-semibold">
+            <button
+              onClick={() => setVerdictFilter('all')}
+              className={`px-3 py-1.5 rounded-lg border transition-colors ${
+                verdictFilter === 'all'
+                  ? 'bg-stone-900 text-white border-stone-900'
+                  : 'bg-white text-stone-700 border-stone-300 hover:bg-stone-100'
+              }`}
+            >
+              All Results ({schemes.length})
+            </button>
+            <button
+              onClick={() => setVerdictFilter('potentially_eligible')}
+              className={`px-3 py-1.5 rounded-lg border transition-colors flex items-center space-x-1 ${
+                verdictFilter === 'potentially_eligible'
+                  ? 'bg-emerald-700 text-white border-emerald-700'
+                  : 'bg-white text-emerald-800 border-emerald-300 hover:bg-emerald-50'
+              }`}
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>Potentially Eligible ({countEligible})</span>
+            </button>
+            <button
+              onClick={() => setVerdictFilter('more_info_required')}
+              className={`px-3 py-1.5 rounded-lg border transition-colors flex items-center space-x-1 ${
+                verdictFilter === 'more_info_required'
+                  ? 'bg-amber-600 text-white border-amber-600'
+                  : 'bg-white text-amber-800 border-amber-300 hover:bg-amber-50'
+              }`}
+            >
+              <HelpCircle className="w-3.5 h-3.5" />
+              <span>More Info Required ({countUncertain})</span>
+            </button>
+            <button
+              onClick={() => setVerdictFilter('not_eligible')}
+              className={`px-3 py-1.5 rounded-lg border transition-colors flex items-center space-x-1 ${
+                verdictFilter === 'not_eligible'
+                  ? 'bg-rose-700 text-white border-rose-700'
+                  : 'bg-white text-rose-800 border-rose-300 hover:bg-rose-50'
+              }`}
+            >
+              <AlertCircle className="w-3.5 h-3.5" />
+              <span>Not Eligible ({countIneligible})</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Scheme Cards Grid */}
+        {filteredSchemes.length > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {filteredSchemes.map((scheme) => (
+              <SchemeCard
+                key={scheme.id}
+                scheme={scheme}
+                onExplainLanguage={(s) => setExplainingScheme(s)}
+                onViewDiff={(s) => setDiffScheme(s)}
+                onSaveSnapshot={handleSaveSnapshot}
+                isSaved={savedSchemes.some((saved) => saved.id === scheme.id)}
+                selectedLanguage={currentLanguage}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="bg-white rounded-xl border border-stone-200 p-8 text-center max-w-lg mx-auto">
+            <Search className="w-10 h-10 text-stone-400 mx-auto mb-3" />
+            <h3 className="text-base font-bold text-stone-800">No schemes match your filter</h3>
+            <p className="text-xs text-stone-500 mt-1">
+              Try changing your filter to "All Results" or enter a new query in the search bar above.
+            </p>
+            <button
+              onClick={() => setVerdictFilter('all')}
+              className="mt-4 px-4 py-2 bg-amber-600 text-stone-950 font-bold text-xs rounded-lg hover:bg-amber-500 transition-colors"
+            >
+              View All Discovered Schemes
+            </button>
+          </div>
+        )}
+
+        {/* Public Service Transparency & Disclaimer Section */}
+        <section aria-labelledby="disclaimer-heading" className="mt-12 bg-white rounded-xl border border-stone-200 p-5 shadow-2xs">
+          <div className="flex items-start space-x-3">
+            <Shield className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
+            <div>
+              <h3 id="disclaimer-heading" className="text-xs font-bold uppercase tracking-wider text-stone-800">
+                Official Public Notice Verification Policy
+              </h3>
+              <p className="mt-1 text-xs text-stone-600 leading-relaxed">
+                TRIDGE queries official government portals (such as <code className="text-amber-800 font-mono">scholarship.up.gov.in</code>, <code className="text-amber-800 font-mono">mksy.up.gov.in</code>, <code className="text-amber-800 font-mono">pmkisan.gov.in</code>, and <code className="text-amber-800 font-mono">pmayg.nic.in</code>) using the TinyFish web infrastructure. Summaries and multilingual explanations are synthesized using Gemini 3.8 Flash.
+                <strong> Automated matches do not constitute an official government determination or sanction.</strong> Always verify official guidelines with your local Tehsil, Block Development Officer (BDO), or on the official department portal.
+              </p>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      {/* Footer */}
+      <footer className="bg-stone-900 text-stone-400 text-xs py-6 border-t border-stone-800 mt-12">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <span className="font-bold text-stone-200 font-serif text-sm">TRIDGE</span>
+            <span className="mx-2">•</span>
+            <span>Multilingual Rural Information & Public Schemes Platform</span>
+          </div>
+          <div className="flex items-center space-x-4 text-[11px]">
+            <span>TinyFish Live Web Research</span>
+            <span>•</span>
+            <span>Gemini Multilingual Explanations</span>
+            <span>•</span>
+            <span>Notice Snapshot Diff Tracking</span>
+          </div>
+        </div>
+      </footer>
+
+      {/* Citizen Profile Drawer */}
+      <CitizenProfileDrawer
+        isOpen={isProfileOpen}
+        onClose={() => setIsProfileOpen(false)}
+        profile={citizenProfile}
+        onUpdateProfile={handleUpdateProfile}
+      />
+
+      {/* Tracked Schemes Drawer */}
+      <TrackedSchemesDrawer
+        isOpen={isTrackedOpen}
+        onClose={() => setIsTrackedOpen(false)}
+        savedSchemes={savedSchemes}
+        onSelectScheme={(s) => {
+          setExplainingScheme(s);
+        }}
+        onViewDiff={(s) => setDiffScheme(s)}
+      />
+
+      {/* Multilingual Explanation Modal */}
+      <MultilingualModal
+        isOpen={Boolean(explainingScheme)}
+        onClose={() => setExplainingScheme(null)}
+        scheme={explainingScheme}
+        initialLanguage={currentLanguage}
+      />
+
+      {/* Notice Diff Modal */}
+      <ChangeDiffModal
+        isOpen={Boolean(diffScheme)}
+        onClose={() => setDiffScheme(null)}
+        scheme={diffScheme}
+      />
+    </div>
+  );
+}
